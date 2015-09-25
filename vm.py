@@ -4,8 +4,6 @@ import struct
 import logging
 
 logging.basicConfig(filename="instructions.log", level=logging.DEBUG)
-logger = logging.getLogger('instructions')
-logger.addHandler(logging.handlers.MemoryHandler())
 '''The vm'''
 class Vm(object):
     MAX_VALUE = 32768
