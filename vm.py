@@ -2,11 +2,14 @@ from os import *
 import sys
 import struct
 import logging
+import signal
 
 logging.basicConfig(filename="instructions.log", level=logging.DEBUG)
+
 '''The vm'''
 class Vm(object):
     MAX_VALUE = 32768
+
     '''Vm takes a file_name to read and start executing'''
     def __init__(self, file_name):
         self.address = 0;
@@ -23,15 +26,21 @@ class Vm(object):
                 }
         self.memory = {}
 
-        fd = open(file_name, "rb")
-        word = fd.read(2)
-        i = 0
-        while word:
-            data = struct.unpack("H", word)[0]
-            self.memory[i] = data
+        if path.isfile('save.pickle'):
+            self.import_state()
+            self.start()
+        else:
+            fd = open(file_name, "rb")
             word = fd.read(2)
-            i = i + 1
-        logging.debug("loaded up %s 16bit items" % i)
+            i = 0
+            while word:
+                data = struct.unpack("H", word)[0]
+                self.memory[i] = data
+                word = fd.read(2)
+                i = i + 1
+            logging.debug("loaded up %s 16bit items" % i)
+
+            self.start()
 
     '''start begins reading the file'''
     def start(self):
@@ -52,7 +61,7 @@ class Vm(object):
     '''execute takes whatever data read and executes the appropriate instruction'''
     def execute(self, data):
         dispatch = {
-            0: exit,
+            0: self.halt,
             1: self.set,
             2: self.push,
             3: self.pop,
@@ -83,6 +92,20 @@ class Vm(object):
             logging.debug(e)
             exit()
 
+    '''imports the state of a machine'''
+    def import_state(self):
+        with open('save.pickle', 'rb') as fd:
+            state = pickle.load(fd)
+            self.address = state[0]
+            self.registers = state[1]
+            self.stack = state[2]
+            self.memory = state[3]
+
+    '''exports the state of the machine'''
+    def export_state(self):
+        with open('save.pickle', 'wb') as fd:
+            pickle.dump((self.address, self.registers, self.stack, self.memory), fd)
+
     ''' jumps to address number, address is converted to the byte number by multiplying by 2 since values are 16bit'''
     def jump(self, address):
         self.address = address
@@ -102,6 +125,11 @@ class Vm(object):
     def set_reg(self, reg, value):
         reg = reg - self.MAX_VALUE
         self.registers[reg] = value
+
+    '''halt, exit'''
+    def halt(self):
+        loggin.debug("halt")
+        exit()
 
     '''set register <a> to the value of <b>'''
     def set(self):
@@ -264,7 +292,50 @@ class Vm(object):
         logging.debug("noop")
         pass
 
-vm = Vm("challenge.bin")
-vm.start()
+class tooling(object):
+    def __init__(self):
+        self.vm = None
+        self.commands = {
+                'help': self.help,
+                'start': self.start,
+                'save': self.save,
+                'exit': self.exit,
+                }
+    def welcome(self):
+        print("Welcome to the Synacor Challenge tool. Type help or enter command.")
+    def help(self):
+        print("""Available commands:
+    help: This dialog
+    start: Start the VM.
+    save: Save the state of the VM.
+    exit: Exit.""")
+    def start(self):
+        print("Starting VM")
+        if self.vm:
+            print("Starting existing")
+            self.vm.start()
+        else:
+            print("Starting new")
+            self.vm = Vm("challenge.bin")
+    def save(self):
+        self.vm.export_state()
+    def exit(self):
+        print("Goodbye")
+        exit()
+    def running(self):
+        if self.vm:
+            return True
+        return False
+    def loop(self):
+        command = input(">")
 
-
+        while command:
+            try:
+                self.commands.get(command)()
+            except TypeError as e:
+                print("Beware of grues")
+            command = input(">")
+        self.exit()
+tool = tooling()
+tool.welcome()
+tool.loop()
