@@ -2,16 +2,21 @@ from os import *
 import sys
 import struct
 import logging
-import signal
-
-logging.basicConfig(filename="instructions.log", level=logging.DEBUG)
-
+import threading
+import queue
+import traceback
+import logging.handlers as handlers
+memory = logging.getLogger()
+fileHandler = logging.FileHandler('instructions.log')
+memoryHandler = handlers.MemoryHandler(1024*100, logging.DEBUG, target=fileHandler)
+memory.addHandler(memoryHandler)
+memory.setLevel(logging.DEBUG)
 '''The vm'''
 class Vm(object):
     MAX_VALUE = 32768
 
     '''Vm takes a file_name to read and start executing'''
-    def __init__(self, file_name):
+    def __init__(self, file_name, q):
         self.address = 0;
         self.stack = []
         self.registers = {
@@ -25,10 +30,10 @@ class Vm(object):
                 7: 0,
                 }
         self.memory = {}
+        self.q = q
 
         if path.isfile('save.pickle'):
             self.import_state()
-            self.start()
         else:
             fd = open(file_name, "rb")
             word = fd.read(2)
@@ -38,9 +43,6 @@ class Vm(object):
                 self.memory[i] = data
                 word = fd.read(2)
                 i = i + 1
-            logging.debug("loaded up %s 16bit items" % i)
-
-            self.start()
 
     '''start begins reading the file'''
     def start(self):
@@ -88,8 +90,8 @@ class Vm(object):
         try:
             dispatch.get(int(data))()
         except TypeError as e:
-            logging.debug("Tried executing %s" % data)
-            logging.debug(e)
+            memory.debug("Tried executing %s" % data)
+            memory.debug(e)
             exit()
 
     '''imports the state of a machine'''
@@ -135,21 +137,21 @@ class Vm(object):
     def set(self):
         a = self.read(raw=True)
         b = self.read()
-        logging.debug("set %s %s" % (a, b))
+        memory.debug("set %s %s" % (a, b))
         self.set_reg(a, b)
 
     '''push <a> onto the stack'''
     def push(self):
         a = self.read()
         self.stack.append(a);
-        logging.debug("push %s" % a)
+        memory.debug("push %s" % a)
 
     '''remove the top element from the stack and write it into <a>; empty stack = error'''
     def pop(self):
         a = self.read(raw=True)
         value = self.stack.pop();
         self.set_reg(a, value)
-        logging.debug("pop %s" % a)
+        memory.debug("pop %s" % a)
 
     '''set <a> to 1 if <b> is equal to <c>; set it to 0 otherwise'''
     def eq(self):
@@ -158,7 +160,7 @@ class Vm(object):
         c = self.read()
         eq = b == c
         self.set_reg(a, int(eq))
-        logging.debug("eq %s %s %s" % (a, b, c))
+        memory.debug("eq %s %s %s" % (a, b, c))
 
     '''set <a> to 1 if <b> is greater than <c>; set it to 0 otherwise'''
     def gt(self):
@@ -166,7 +168,7 @@ class Vm(object):
         b = self.read()
         c = self.read()
         self.set_reg(a, int(b > c))
-        logging.debug("gt %s %s %s" % (a, b, c))
+        memory.debug("gt %s %s %s" % (a, b, c))
 
     '''jump to <a>'''
     def jmp(self):
@@ -177,7 +179,7 @@ class Vm(object):
     def jt(self):
         a = self.read()
         b = self.read()
-        logging.debug("jt %s %s" % (a, b))
+        memory.debug("jt %s %s" % (a, b))
         if a != 0:
             self.jump(b)
 
@@ -185,7 +187,7 @@ class Vm(object):
     def jf(self):
         a = self.read()
         b = self.read()
-        logging.debug("jf %s %s" % (a, b))
+        memory.debug("jf %s %s" % (a, b))
         if a == 0:
             self.jump(b)
 
@@ -196,7 +198,7 @@ class Vm(object):
         c = self.read()
         sum = (b + c) % self.MAX_VALUE
         self.set_reg(a, sum)
-        logging.debug("add %s %s %s" % (a, b, c))
+        memory.debug("add %s %s %s" % (a, b, c))
 
     '''store into <a> the product of <b> and <c> (modulo 32768)   '''
     def mult(self):
@@ -205,8 +207,8 @@ class Vm(object):
         c = self.read()
         product = (b * c) % self.MAX_VALUE
         self.set_reg(a, product)
-        logging.debug("mult %s, %s, %s" % (a, b, c))
-        logging.debug("product %s" % product)
+        memory.debug("mult %s, %s, %s" % (a, b, c))
+        memory.debug("product %s" % product)
 
     '''store into <a> the remainder of <b> divided by <c>'''
     def mod(self):
@@ -215,7 +217,7 @@ class Vm(object):
         c = self.read()
         mod = b % c
         self.set_reg(a, mod)
-        logging.debug("mod %s %s %s" % (a, b, c))
+        memory.debug("mod %s %s %s" % (a, b, c))
 
     '''stores into <a> the bitwise and of <b> and <c>'''
     def and_fn(self):
@@ -223,7 +225,7 @@ class Vm(object):
         b = self.read()
         c = self.read()
         self.set_reg(a, (b & c) % self.MAX_VALUE)
-        logging.debug("and %s %s %s" % (a, b, c))
+        memory.debug("and %s %s %s" % (a, b, c))
 
     '''stores into <a> the bitwise or of <b> and <c>'''
     def or_fn(self):
@@ -231,7 +233,7 @@ class Vm(object):
         b = self.read()
         c = self.read()
         self.set_reg(a, (b | c) % self.MAX_VALUE)
-        logging.debug("or %s %s %s" % (a, b, c))
+        memory.debug("or %s %s %s" % (a, b, c))
 
     '''stores 15-bit bitwise inverse of <b> in <a>'''
     def not_fn(self):
@@ -240,7 +242,7 @@ class Vm(object):
 
         not_val = (~b & 0xFFFF) % self.MAX_VALUE
         self.set_reg(a, not_val)
-        logging.debug("not %s %s" % (a, b))
+        memory.debug("not %s %s" % (a, b))
 
     '''read memory at address <b> and write it to <a>'''
     def rmem(self):
@@ -248,23 +250,22 @@ class Vm(object):
         b = self.read()
         self.set_reg(a, self.memory[b])
 
-        logging.debug("rmem %s %s" % (a, b))
+        memory.debug("rmem %s %s" % (a, b))
 
     '''write the value from <b> into memory at address <a>'''
     def wmem(self):
         a = self.read()
         b = self.read()
         self.memory[a] = b
-        logging.debug("wmem %s %s" % (a, b))
+        memory.debug("wmem %s %s" % (a, b))
 
     '''write the address of the next instruction to the stack and jump to <a>'''
     def call(self):
         a = self.read()
-        logging.debug("Calling %s at %s, next instruction at %s" % (a, self.address-1, self.address))
         self.stack.append(self.address)
 
         self.jump(a)
-        logging.debug("call %s" % a)
+        memory.debug("call %s" % a)
 
     '''remove the top element from the stack and jump to it; empty stack = halt'''
     def ret(self):
@@ -272,7 +273,7 @@ class Vm(object):
             exit()
         el = self.stack.pop()
         self.jump(el)
-        logging.debug("ret")
+        memory.debug("ret")
 
     '''write the character represented by ascii code <a> to the terminal'''
     def out_fn(self):
@@ -283,59 +284,103 @@ class Vm(object):
     '''read a character from the terminal and write its ascii code to <a>; it can be assumed that once input starts, it will continue until a newline is encountered; this means that you can safely read whole lines from the keyboard and trust that they will be fully read'''
     def in_fn(self):
         a = self.read(raw=True)
-        user_input = sys.stdin.read(1)
+        user_input = self.q.get()
         self.set_reg(a, ord(user_input))
-        logging.debug("in %s" % a);
+        memory.debug("in %s" % a);
 
     '''no operation'''
     def noop(self):
-        logging.debug("noop")
+        memory.debug("noop")
         pass
 
 class tooling(object):
     def __init__(self):
+        self.q = queue.Queue()
         self.vm = None
+        self.vm_thread = None
         self.commands = {
                 'help': self.help,
                 'start': self.start,
                 'save': self.save,
                 'exit': self.exit,
+                'status': self.status,
+                'send': self.send,
                 }
+
     def welcome(self):
         print("Welcome to the Synacor Challenge tool. Type help or enter command.")
-    def help(self):
+
+    def help(self, c):
         print("""Available commands:
     help: This dialog
     start: Start the VM.
     save: Save the state of the VM.
+    put: Send data to the VM, everything after put is sent
+    status: Is the VM running or not
     exit: Exit.""")
-    def start(self):
+
+    def start(self, c):
         print("Starting VM")
         if self.vm:
             print("Starting existing")
-            self.vm.start()
+            self.vm_thread = threading.Thread(target=self.vm.start)
         else:
             print("Starting new")
-            self.vm = Vm("challenge.bin")
-    def save(self):
+            self.vm = Vm("challenge.bin", self.q)
+            self.vm_thread = threading.Thread(target=self.vm.start)
+        self.vm_thread.start()
+
+    def save(self, c):
         self.vm.export_state()
-    def exit(self):
+
+    def status(self, c):
+        if self.vm:
+            print ("VM is running")
+        else:
+            print("No VM running. Type start to start one")
+
+    def exit(self, c):
+        if self.vm_thread:
+            self.q.task_done()
         print("Goodbye")
         exit()
-    def running(self):
+
+    def running(self, c):
         if self.vm:
             return True
         return False
+
+    def send(self, command):
+        command = command + "\n"
+        for i in command:
+            self.q.put(i)
+
     def loop(self):
         command = input(">")
-
+        try:
+            separator = command.index(' ')
+            instruction = command[:separator]
+            rest = command[separator + 1:]
+        except ValueError:
+            instruction = command
+            rest = None
         while command:
             try:
-                self.commands.get(command)()
+                separator = command.index(' ')
+                instruction = command[:separator]
+                rest = command[separator + 1:]
+            except ValueError:
+                instruction = command
+                rest = None
+            try:
+                self.commands.get(instruction)(rest)
             except TypeError as e:
+                print(e)
+                print(traceback.format_exc())
                 print("Beware of grues")
             command = input(">")
-        self.exit()
+        self.exit(None)
+
 tool = tooling()
 tool.welcome()
 tool.loop()
