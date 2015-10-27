@@ -1,4 +1,4 @@
-from os import *
+import os
 import sys
 import struct
 import logging
@@ -6,9 +6,11 @@ import threading
 import queue
 import traceback
 import logging.handlers as handlers
+import pickle
+
 memory = logging.getLogger()
 fileHandler = logging.FileHandler('instructions.log')
-memoryHandler = handlers.MemoryHandler(1024*100, logging.DEBUG, target=fileHandler)
+memoryHandler = handlers.MemoryHandler(1024*1000, logging.DEBUG, target=fileHandler)
 memory.addHandler(memoryHandler)
 memory.setLevel(logging.DEBUG)
 '''The vm'''
@@ -32,10 +34,10 @@ class Vm(object):
         self.memory = {}
         self.q = q
 
-        if path.isfile('save.pickle'):
+        if os.path.isfile('save.pickle'):
             self.import_state()
         else:
-            fd = open(file_name, "rb")
+            fd = open(file_name, 'rb')
             word = fd.read(2)
             i = 0
             while word:
@@ -46,19 +48,16 @@ class Vm(object):
 
     '''start begins reading the file'''
     def start(self):
-        data = self.read()
+        (data, data_val) = self.read()
         while data:
             self.execute(data)
-            data = self.read()
+            (data, data_val) = self.read()
 
     '''read reads 16 bits (2 bytes) at a time and returns the data'''
-    def read(self, raw=False):
+    def read(self):
         value = self.memory[self.address]
         self.address = self.address + 1
-        if raw:
-            return value
-        else:
-            return self.deref(value)
+        return (value, self.deref(value))
 
     '''execute takes whatever data read and executes the appropriate instruction'''
     def execute(self, data):
@@ -108,6 +107,10 @@ class Vm(object):
         with open('save.pickle', 'wb') as fd:
             pickle.dump((self.address, self.registers, self.stack, self.memory), fd)
 
+    '''send a debug message'''
+    def debug(self, message):
+        memory.debug("%s: %s" % (self.address,message))
+
     ''' jumps to address number, address is converted to the byte number by multiplying by 2 since values are 16bit'''
     def jump(self, address):
         self.address = address
@@ -130,167 +133,170 @@ class Vm(object):
 
     '''halt, exit'''
     def halt(self):
-        loggin.debug("halt")
+        self.debug("halt")
         exit()
 
     '''set register <a> to the value of <b>'''
     def set(self):
-        a = self.read(raw=True)
-        b = self.read()
-        memory.debug("set %s %s" % (a, b))
-        self.set_reg(a, b)
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        self.debug("set %s<%s> %s<%s>" % (a, a_val, b, b_val))
+        self.set_reg(a, b_val)
 
     '''push <a> onto the stack'''
     def push(self):
-        a = self.read()
-        self.stack.append(a);
-        memory.debug("push %s" % a)
+        (a, a_val) = self.read()
+        self.stack.append(a_val);
+        self.debug("push %s<%s>" % (a, a_val))
 
     '''remove the top element from the stack and write it into <a>; empty stack = error'''
     def pop(self):
-        a = self.read(raw=True)
+        (a, a_val) = self.read()
         value = self.stack.pop();
         self.set_reg(a, value)
-        memory.debug("pop %s" % a)
+        self.debug("pop %s (value popped %s))" % (a, value))
 
     '''set <a> to 1 if <b> is equal to <c>; set it to 0 otherwise'''
     def eq(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        eq = b == c
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        eq = b_val == c_val
         self.set_reg(a, int(eq))
-        memory.debug("eq %s %s %s" % (a, b, c))
+        self.debug("eq %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''set <a> to 1 if <b> is greater than <c>; set it to 0 otherwise'''
     def gt(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        self.set_reg(a, int(b > c))
-        memory.debug("gt %s %s %s" % (a, b, c))
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        self.set_reg(a, int(b_val > c_val))
+        self.debug("gt %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''jump to <a>'''
     def jmp(self):
-        a = self.read()
-        self.jump(a)
+        (a, a_val) = self.read()
+        self.debug("jmp %s<%s>" % (a, a_val))
+        self.jump(a_val)
 
     '''if <a> is nonzero, jump to <b>'''
     def jt(self):
-        a = self.read()
-        b = self.read()
-        memory.debug("jt %s %s" % (a, b))
-        if a != 0:
-            self.jump(b)
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        self.debug("jt %s<%s> %s<%s>" % (a, a_val, b, b_val))
+        if a_val != 0:
+            self.jump(b_val)
 
     '''if <a> is zero, jump to <b>'''
     def jf(self):
-        a = self.read()
-        b = self.read()
-        memory.debug("jf %s %s" % (a, b))
-        if a == 0:
-            self.jump(b)
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        self.debug("jf %s<%s> %s<%s>" % (a, a_val, b, b_val))
+        if a_val == 0:
+            self.jump(b_val)
 
     '''assign into <a> the sum of <b> and <c> (modulo 32768) '''
     def add(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        sum = (b + c) % self.MAX_VALUE
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        sum = (b_val + c_val) % self.MAX_VALUE
         self.set_reg(a, sum)
-        memory.debug("add %s %s %s" % (a, b, c))
+        self.debug("add %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''store into <a> the product of <b> and <c> (modulo 32768)   '''
     def mult(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        product = (b * c) % self.MAX_VALUE
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        product = (b_val * c_val) % self.MAX_VALUE
         self.set_reg(a, product)
-        memory.debug("mult %s, %s, %s" % (a, b, c))
-        memory.debug("product %s" % product)
+        self.debug("mult %s %s<%s> %s<%s> (product %s)" % (a, b, b_val, c, c_val, product))
 
     '''store into <a> the remainder of <b> divided by <c>'''
     def mod(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        mod = b % c
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        mod = b_val % c_val
         self.set_reg(a, mod)
-        memory.debug("mod %s %s %s" % (a, b, c))
+        self.debug("mod %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''stores into <a> the bitwise and of <b> and <c>'''
     def and_fn(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        self.set_reg(a, (b & c) % self.MAX_VALUE)
-        memory.debug("and %s %s %s" % (a, b, c))
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        self.set_reg(a, (b_val & c_val) % self.MAX_VALUE)
+        self.debug("and %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''stores into <a> the bitwise or of <b> and <c>'''
     def or_fn(self):
-        a = self.read(raw=True)
-        b = self.read()
-        c = self.read()
-        self.set_reg(a, (b | c) % self.MAX_VALUE)
-        memory.debug("or %s %s %s" % (a, b, c))
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        (c, c_val) = self.read()
+        self.set_reg(a, (b_val | c_val) % self.MAX_VALUE)
+        self.debug("or %s %s<%s> %s<%s>" % (a, b, b_val, c, c_val))
 
     '''stores 15-bit bitwise inverse of <b> in <a>'''
     def not_fn(self):
-        a = self.read(raw=True)
-        b = self.read()
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
 
-        not_val = (~b & 0xFFFF) % self.MAX_VALUE
+        not_val = (~b_val & 0xFFFF) % self.MAX_VALUE
         self.set_reg(a, not_val)
-        memory.debug("not %s %s" % (a, b))
+        self.debug("not %s %s<%s>" % (a, b, b_val))
 
     '''read memory at address <b> and write it to <a>'''
     def rmem(self):
-        a = self.read(raw=True)
-        b = self.read()
-        self.set_reg(a, self.memory[b])
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        self.set_reg(a, self.memory[b_val])
 
-        memory.debug("rmem %s %s" % (a, b))
+        self.debug("rmem %s %s<%s>" % (a, b, b_val))
 
     '''write the value from <b> into memory at address <a>'''
     def wmem(self):
-        a = self.read()
-        b = self.read()
-        self.memory[a] = b
-        memory.debug("wmem %s %s" % (a, b))
+        (a, a_val) = self.read()
+        (b, b_val) = self.read()
+        self.memory[a_val] = b_val
+        self.debug("wmem %s<%s> %s<%s>" % (a, a_val, b, b_val))
 
     '''write the address of the next instruction to the stack and jump to <a>'''
     def call(self):
-        a = self.read()
+        (a, a_val) = self.read()
         self.stack.append(self.address)
 
-        self.jump(a)
-        memory.debug("call %s" % a)
+        self.debug("call %s<%s>" % (a, a_val))
+
+        self.jump(a_val)
 
     '''remove the top element from the stack and jump to it; empty stack = halt'''
     def ret(self):
         if len(self.stack) == 0:
+            self.debug("exiting due to empty stack in ret")
             exit()
         el = self.stack.pop()
+        self.debug("ret %s" % el)
         self.jump(el)
-        memory.debug("ret")
 
     '''write the character represented by ascii code <a> to the terminal'''
     def out_fn(self):
-        a = self.read()
-        sys.stdout.write(chr(a))
+        (a, a_val) = self.read()
+        self.debug("out %s<%s>" % (a, chr(a_val)));
+        sys.stdout.write(chr(a_val))
         sys.stdout.flush()
 
     '''read a character from the terminal and write its ascii code to <a>; it can be assumed that once input starts, it will continue until a newline is encountered; this means that you can safely read whole lines from the keyboard and trust that they will be fully read'''
     def in_fn(self):
-        a = self.read(raw=True)
+        (a, a_val) = self.read()
         user_input = self.q.get()
         self.set_reg(a, ord(user_input))
-        memory.debug("in %s" % a);
+        self.debug("in %s" % a);
 
     '''no operation'''
     def noop(self):
-        memory.debug("noop")
+        self.debug("noop")
         pass
 
 class tooling(object):
@@ -305,30 +311,36 @@ class tooling(object):
                 'exit': self.exit,
                 'status': self.status,
                 'send': self.send,
+                'hack': self.hack,
+                'registers': self.registers,
+                'jump': self.jump,
+                'exec': self.exec,
                 }
 
     def welcome(self):
         print("Welcome to the Synacor Challenge tool. Type help or enter command.")
 
-    def help(self, c):
+    def help(self, c=None):
         print("""Available commands:
     help: This dialog
     start: Start the VM.
     save: Save the state of the VM.
-    put: Send data to the VM, everything after put is sent
     status: Is the VM running or not
+    send: send the string following to the vm. e.g. send take tablet
+    hack: set a register to a value. e.g. hack 8 1337
+    registers: print out the registers
+    jump: jump to a code line
+    exec: execute arbitrary code
     exit: Exit.""")
 
     def start(self, c):
-        print("Starting VM")
         if self.vm:
-            print("Starting existing")
-            self.vm_thread = threading.Thread(target=self.vm.start)
+            print("Already started")
         else:
-            print("Starting new")
+            print("Starting Vm")
             self.vm = Vm("challenge.bin", self.q)
             self.vm_thread = threading.Thread(target=self.vm.start)
-        self.vm_thread.start()
+            self.vm_thread.start()
 
     def save(self, c):
         self.vm.export_state()
@@ -340,8 +352,6 @@ class tooling(object):
             print("No VM running. Type start to start one")
 
     def exit(self, c):
-        if self.vm_thread:
-            self.q.task_done()
         print("Goodbye")
         exit()
 
@@ -354,6 +364,31 @@ class tooling(object):
         command = command + "\n"
         for i in command:
             self.q.put(i)
+
+    def hack(self, command):
+        try:
+            reg, val = command.split(' ')
+            if self.vm:
+                self.vm.set_reg(int(reg)+self.vm.MAX_VALUE, int(val))
+        except ValueError:
+            return
+
+    def registers(self, command):
+        if self.vm:
+            print(self.vm.registers)
+
+    def jump(self, command):
+        if self.vm:
+            print("Jumping to %s" % command)
+            self.vm.jump(int(command))
+
+    def exec(self, command):
+        try:
+            eval(command)
+        except Exception as e:
+            print(e)
+            print(traceback.format_exc())
+
 
     def loop(self):
         command = input(">")
@@ -375,10 +410,13 @@ class tooling(object):
             try:
                 self.commands.get(instruction)(rest)
             except TypeError as e:
+                print("Beware of grues")
+                self.help()
+            try:
+                command = input(">")
+            except ValueError as e:
                 print(e)
                 print(traceback.format_exc())
-                print("Beware of grues")
-            command = input(">")
         self.exit(None)
 
 tool = tooling()
