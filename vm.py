@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import os
 import sys
 import struct
@@ -17,8 +18,33 @@ memory.setLevel(logging.DEBUG)
 class Vm(object):
     MAX_VALUE = 32768
 
+
     '''Vm takes a file_name to read and start executing'''
     def __init__(self, file_name, q):
+        self.names = {
+            0: 'halt',
+            1: 'set',
+            2: 'push',
+            3: 'pop',
+            4: 'eq',
+            5: 'gt',
+            6: 'jmp',
+            7: 'jt',
+            8: 'jf',
+            9: 'add',
+            10: 'mult',
+            11: 'mod',
+            12: 'and_fn',
+            13: 'or_fn',
+            14: 'not_fn',
+            15: 'rmem',
+            16: 'wmem',
+            17: 'call',
+            18: 'ret',
+            19: 'out_fn',
+            20: 'in_fn',
+            21: 'noop'
+            }
         self.address = 0;
         self.stack = []
         self.registers = {
@@ -50,11 +76,17 @@ class Vm(object):
     def start(self):
         (data, data_val) = self.read()
         while data:
+
             self.execute(data)
             (data, data_val) = self.read()
 
     '''read reads 16 bits (2 bytes) at a time and returns the data'''
     def read(self):
+        if self.address == 5511:
+            # Jump to return value
+            self.address = 5513
+            self.registers[7] = 25734 # calculated by algo.go
+            self.registers[0] = 6 # r0 check after 6049 sub routine in the vm
         value = self.memory[self.address]
         self.address = self.address + 1
         return (value, self.deref(value))
@@ -87,6 +119,7 @@ class Vm(object):
             }
 
         try:
+            memory.debug("%s: Op Code %s" % (self.address - 1, self.names.get(data)))
             dispatch.get(int(data))()
         except TypeError as e:
             memory.debug("Tried executing %s" % data)
@@ -109,7 +142,7 @@ class Vm(object):
 
     '''send a debug message'''
     def debug(self, message):
-        memory.debug("%s: %s" % (self.address,message))
+        memory.debug("%s" % message)
 
     ''' jumps to address number, address is converted to the byte number by multiplying by 2 since values are 16bit'''
     def jump(self, address):
@@ -148,6 +181,7 @@ class Vm(object):
         (a, a_val) = self.read()
         self.stack.append(a_val);
         self.debug("push %s<%s>" % (a, a_val))
+        self.debug(self.stack);
 
     '''remove the top element from the stack and write it into <a>; empty stack = error'''
     def pop(self):
@@ -155,6 +189,7 @@ class Vm(object):
         value = self.stack.pop();
         self.set_reg(a, value)
         self.debug("pop %s (value popped %s))" % (a, value))
+        self.debug(self.stack);
 
     '''set <a> to 1 if <b> is equal to <c>; set it to 0 otherwise'''
     def eq(self):
