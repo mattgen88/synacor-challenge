@@ -99,10 +99,11 @@ function explore($max_steps) {
 }
 
 function print_steps($result) {
+	echo "(0,0) ";
 	foreach($result as $step) {
 		echo "(" . $step['x'] . "," . $step['y'] . ") ";
 	}
-	echo "\n";
+	echo "(3,3)\n";
 }
 
 $vault = [
@@ -133,5 +134,8 @@ do {
 while (!$result || $steps > 10);
 echo "\nTotal iteration " . count($result) . "\n";
 //print_r($result);
-
+/*
+New lowest found for 13 steps.
+(0,0) (1,0) (2,0) (1,0) (2,0) (1,0) (1,1) (1,0) (2,0) (1,0) (1,1) (1,2) (2,2) (3,2) (3,3)
+*/
 ?>
