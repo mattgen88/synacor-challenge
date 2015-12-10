@@ -140,6 +140,9 @@ class Vm(object):
         with open('save.pickle', 'wb') as fd:
             pickle.dump((self.address, self.registers, self.stack, self.memory), fd)
 
+    def set_stack(self, ind, val):
+        self.stack[ind] = val
+
     '''send a debug message'''
     def debug(self, message):
         memory.debug("%s" % message)
@@ -411,6 +414,7 @@ class tooling(object):
     def registers(self, command):
         if self.vm:
             print(self.vm.registers)
+            print(self.vm.stack)
 
     def jump(self, command):
         if self.vm:
